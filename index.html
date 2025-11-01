@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Microscope + Measurement (Freeze Fix)</title>
+<style>
+  :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--glass:rgba(255,255,255,0.04);}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;}
+  body{background:linear-gradient(180deg,#071024 0%,#07192b 100%);color:#e6eef6;display:flex;align-items:center;justify-content:center;padding:12px;}
+  .app{width:100%;max-width:1100px;background:var(--card);border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6);}
+  header{display:flex;align-items:center;gap:12px}
+  h1{font-size:18px;margin:0}
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .viewer{background:var(--glass);border-radius:8px;position:relative;overflow:hidden;min-height:420px}
+  video,canvas#frozenFrame{width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;}
+  canvas.overlay{position:absolute;left:0;top:0;right:0;bottom:0;width:100%;height:100%;}
+  .controls{display:flex;flex-direction:column;gap:8px;padding:8px}
+  .panel{background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);padding:10px;border-radius:8px}
+  label{font-size:12px;color:var(--muted)}
+  input[type=range]{width:100%}
+  .btn{background:var(--accent);color:#062024;padding:8px 10px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
+  .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+  .measure-list{max-height:200px;overflow:auto;padding:6px;font-size:13px;border-radius:6px;background:rgba(0,0,0,0.15)}
+  .small{font-size:12px;color:var(--muted)}
+  footer{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Microscope + Measurement — Image Analysis Tool</h1>
+    <div style="margin-left:auto" class="small">Freeze for stable calibration</div>
+  </header>
+
+  <div class="grid">
+    <div>
+      <div class="viewer">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="frozenFrame"></canvas>
+        <canvas id="overlay" class="overlay"></canvas>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="freezeBtn" class="btn">Freeze</button>
+        <button id="captureBtn" class="btn">Capture</button>
+        <button id="clearBtn" class="btn secondary">Clear</button>
+        <button id="exportBtn" class="btn secondary">Export CSV</button>
+      </div>
+
+      <div class="panel" style="margin-top:8px">
+        <div class="small">Digital Zoom</div>
+        <input id="zoomRange" type="range" min="1" max="32" step="0.01" value="1">
+        <div class="small">Current Zoom: <span id="zoomDisplay">1×</span></div>
+      </div>
+    </div>
+
+    <aside class="controls">
+      <div class="panel">
+        <div class="small"><strong>Calibration</strong></div>
+        <div class="small" style="margin-top:6px">Tap two points on a known-length reference, then enter real length (mm).</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button id="calModeBtn" class="btn secondary">Enter Calibrate Mode</button>
+          <button id="resetCalBtn" class="btn secondary">Reset</button>
+        </div>
+        <div style="margin-top:8px">
+          <label class="small">Pixels per mm:</label>
+          <div id="pxPerMm" style="font-weight:700">—</div>
+          <label class="small">True Magnification:</label>
+          <div id="trueMag" style="font-weight:700">—</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="small"><strong>Measurement</strong></div>
+        <div class="small" style="margin-top:6px">Click two points across the crack to measure width.</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button id="measureModeBtn" class="btn">Measure</button>
+          <button id="saveMeasureBtn" class="btn secondary">Save</button>
+        </div>
+        <div style="margin-top:8px">
+          <label class="small">Saved Measurements (mm)</label>
+          <div id="measureList" class="measure-list"></div>
+        </div>
+      </div>
+
+      <footer>v1.4 — Fixed freeze aspect ratio and zoom alignment.</footer>
+    </aside>
+  </div>
+</div>
+
+<script>
+(async function(){
+  const video=document.getElementById('video'),
+        overlay=document.getElementById('overlay'),
+        frozenCanvas=document.getElementById('frozenFrame'),
+        ctx=overlay.getContext('2d',{willReadFrequently:true}),
+        frozenCtx=frozenCanvas.getContext('2d');
+  const freezeBtn=document.getElementById('freezeBtn'),
+        zoomRange=document.getElementById('zoomRange'),
+        zoomDisplay=document.getElementById('zoomDisplay'),
+        trueMagEl=document.getElementById('trueMag'),
+        pxPerMmEl=document.getElementById('pxPerMm'),
+        calModeBtn=document.getElementById('calModeBtn'),
+        resetCalBtn=document.getElementById('resetCalBtn'),
+        measureModeBtn=document.getElementById('measureModeBtn'),
+        saveMeasureBtn=document.getElementById('saveMeasureBtn'),
+        clearBtn=document.getElementById('clearBtn'),
+        captureBtn=document.getElementById('captureBtn'),
+        exportBtn=document.getElementById('exportBtn'),
+        measureListEl=document.getElementById('measureList');
+
+  let stream=null,isFrozen=false,currentMode=null,calibration={pixels:null,mm:null,pxPerMm:null},points=[],saved=[],trueMag=1;
+
+  function fitCanvas(){
+    const width=overlay.clientWidth,height=overlay.clientHeight;
+    [overlay,frozenCanvas].forEach(c=>{c.width=width;c.height=height;});
+  }
+  window.addEventListener('resize',fitCanvas);
+
+  async function startCamera(){
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      video.srcObject=stream;
+      await video.play();
+      fitCanvas();
+    }catch(e){alert('Camera error: '+e.message);}
+  }
+  await startCamera();
+
+  // 🧊 FIXED FREEZE FUNCTION — same aspect ratio and scale
+  freezeBtn.onclick=()=>{
+    if(!isFrozen){
+      fitCanvas(); // ensure canvas fits before drawing
+      frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
+      // draw current video frame exactly scaled to display area
+      frozenCtx.drawImage(video,0,0,video.videoWidth,video.videoHeight,0,0,frozenCanvas.width,frozenCanvas.height);
+      frozenCanvas.style.display='block';
+      video.style.display='none';
+      freezeBtn.textContent='Unfreeze';
+      isFrozen=true;
