@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Microscope + Measurement (Camera + Freeze Fixed)</title>
+<title>Microscope + Measurement (v2.0 Responsive)</title>
 <style>
   :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;}
   html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;}
@@ -13,9 +13,8 @@
   h1{font-size:18px;margin:0}
   .grid{display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px}
   @media(max-width:900px){.grid{grid-template-columns:1fr}}
-  .viewer{background:#0b1220;border-radius:8px;position:relative;overflow:hidden;min-height:420px}
-  video,canvas#frozenFrame{width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;}
-  canvas.overlay{position:absolute;left:0;top:0;right:0;bottom:0;width:100%;height:100%;}
+  .viewer{position:relative;width:100%;aspect-ratio:4/3;background:#0b1220;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+  video,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;}
   .controls{display:flex;flex-direction:column;gap:8px;padding:8px}
   .panel{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px}
   .btn{background:var(--accent);color:#062024;padding:8px 10px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
@@ -49,7 +48,11 @@
 
       <div class="panel" style="margin-top:8px">
         <div class="small">Digital Zoom</div>
-        <input id="zoomRange" type="range" min="1" max="64" step="0.01" value="1">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button id="zoomOutBtn" class="btn secondary" style="width:36px;">−</button>
+          <input id="zoomRange" type="range" min="1" max="64" step="0.1" value="1" style="flex:1;">
+          <button id="zoomInBtn" class="btn secondary" style="width:36px;">+</button>
+        </div>
         <div class="small">Current Zoom: <span id="zoomDisplay">1×</span></div>
       </div>
     </div>
@@ -83,7 +86,7 @@
         </div>
       </div>
 
-      <footer>v1.5 — Camera stable, freeze aspect ratio fixed.</footer>
+      <footer>v2.0 — Responsive, calibrated, and export-ready.</footer>
     </aside>
   </div>
 </div>
@@ -95,7 +98,6 @@
         frozenCanvas=document.getElementById('frozenFrame'),
         ctx=overlay.getContext('2d'),
         frozenCtx=frozenCanvas.getContext('2d');
-
   const freezeBtn=document.getElementById('freezeBtn'),
         zoomRange=document.getElementById('zoomRange'),
         zoomDisplay=document.getElementById('zoomDisplay'),
@@ -108,6 +110,8 @@
         clearBtn=document.getElementById('clearBtn'),
         captureBtn=document.getElementById('captureBtn'),
         exportBtn=document.getElementById('exportBtn'),
+        zoomOutBtn=document.getElementById('zoomOutBtn'),
+        zoomInBtn=document.getElementById('zoomInBtn'),
         measureListEl=document.getElementById('measureList');
 
   let stream=null,isFrozen=false,currentMode=null,calibration={pixels:null,mm:null,pxPerMm:null},points=[],saved=[],trueMag=1;
@@ -121,74 +125,43 @@
     try{
       stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
       video.srcObject=stream;
-      video.addEventListener('loadedmetadata',()=>{
-        fitCanvas();
-        video.play();
-      });
-    }catch(e){
-      alert('Camera access error: '+e.message);
-    }
+      video.addEventListener('loadedmetadata',()=>{fitCanvas();video.play();});
+    }catch(e){alert('Camera access error: '+e.message);}
   }
-
   await startCamera();
 
-  // Freeze logic — now safe
-// Replace your existing freezeBtn.onclick handler with this version
-freezeBtn.onclick = () => {
-  if (!isFrozen) {
-    fitCanvas(); // keep canvas sizes matched
-    // Compute how the <video> is being cropped inside the element box
-    const vRatio = video.videoWidth / video.videoHeight;
-    const boxRatio = video.clientWidth / video.clientHeight;
-    let sx, sy, sw, sh;
-
-    if (vRatio > boxRatio) {
-      // video is wider → crop horizontally
-      sh = video.videoHeight;
-      sw = sh * boxRatio;
-      sx = (video.videoWidth - sw) / 2;
-      sy = 0;
-    } else {
-      // video is taller → crop vertically
-      sw = video.videoWidth;
-      sh = sw / boxRatio;
-      sx = 0;
-      sy = (video.videoHeight - sh) / 2;
+  freezeBtn.onclick=()=>{
+    if(!isFrozen){
+      fitCanvas();
+      const vRatio=video.videoWidth/video.videoHeight,boxRatio=video.clientWidth/video.clientHeight;
+      let sx,sy,sw,sh;
+      if(vRatio>boxRatio){sh=video.videoHeight;sw=sh*boxRatio;sx=(video.videoWidth-sw)/2;sy=0;}
+      else{sw=video.videoWidth;sh=sw/boxRatio;sx=0;sy=(video.videoHeight-sh)/2;}
+      frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
+      frozenCtx.drawImage(video,sx,sy,sw,sh,0,0,frozenCanvas.width,frozenCanvas.height);
+      frozenCanvas.style.display='block';video.style.display='none';
+      freezeBtn.textContent='Unfreeze';isFrozen=true;
+    }else{
+      frozenCanvas.style.display='none';video.style.display='block';
+      freezeBtn.textContent='Freeze';isFrozen=false;
     }
+  };
 
-    // Clear and draw exactly the visible portion
-    frozenCtx.clearRect(0, 0, frozenCanvas.width, frozenCanvas.height);
-    frozenCtx.drawImage(
-      video,
-      sx, sy, sw, sh,                // crop region from camera frame
-      0, 0, frozenCanvas.width, frozenCanvas.height // draw region size
-    );
+  zoomRange.addEventListener('input',updateZoom);
+  zoomOutBtn.onclick=()=>{zoomRange.value=Math.max(1,Number(zoomRange.value)-0.5);updateZoom();};
+  zoomInBtn.onclick=()=>{zoomRange.value=Math.min(64,Number(zoomRange.value)+0.5);updateZoom();};
 
-    frozenCanvas.style.display = 'block';
-    video.style.display = 'none';
-    freezeBtn.textContent = 'Unfreeze';
-    isFrozen = true;
-  } else {
-    frozenCanvas.style.display = 'none';
-    video.style.display = 'block';
-    freezeBtn.textContent = 'Freeze';
-    isFrozen = false;
-  }
-};
-
-
-  zoomRange.addEventListener('input',()=>{
+  function updateZoom(){
     const z=Number(zoomRange.value);
     video.style.transform=`scale(${z})`;
     frozenCanvas.style.transform=`scale(${z})`;
     zoomDisplay.textContent=z.toFixed(1)+'×';
     updateMagnification();
-  });
+  }
 
   function updateMagnification(){
     if(!calibration.pxPerMm){trueMagEl.textContent='—';trueMag=1;return;}
-    const screenPPI=window.devicePixelRatio*96;
-    const screenPxPerMm=screenPPI/25.4;
+    const screenPPI=window.devicePixelRatio*96,screenPxPerMm=screenPPI/25.4;
     trueMag=(calibration.pxPerMm/screenPxPerMm)*Number(zoomRange.value);
     trueMagEl.textContent=trueMag.toFixed(1)+'×';
   }
@@ -197,7 +170,7 @@ freezeBtn.onclick = () => {
     const r=overlay.getBoundingClientRect();
     const x=((e.touches?e.touches[0].clientX:e.clientX)-r.left)*(overlay.width/r.width);
     const y=((e.touches?e.touches[0].clientY:e.clientY)-r.top)*(overlay.height/r.height);
-    return {x,y};
+    return{x,y};
   }
 
   let dragging=null;
@@ -241,21 +214,34 @@ freezeBtn.onclick = () => {
     if(m.length<2)return alert('Place two points');
     if(!calibration.pxPerMm)return alert('Calibrate first');
     const dx=m[0].x-m[1].x,dy=m[0].y-m[1].y,pix=Math.hypot(dx,dy),mm=pix/calibration.pxPerMm;
-    saved.push({time:new Date().toISOString(),mm,mag:trueMag});
-    updateList();
+    saved.push({time:new Date().toISOString(),mm,mag:trueMag});updateList();
   };
   clearBtn.onclick=()=>{points=[];draw();};
+
   captureBtn.onclick=()=>{
-    const c=document.createElement('canvas');c.width=overlay.width;c.height=overlay.height;
+    const c=document.createElement('canvas');
+    c.width=video.videoWidth;c.height=video.videoHeight;
     const cx=c.getContext('2d');
-    if(isFrozen)cx.drawImage(frozenCanvas,0,0,c.width,c.height);else cx.drawImage(video,0,0,c.width,c.height);
-    cx.drawImage(overlay,0,0);
-    const img=c.toDataURL('image/png');const w=window.open();if(w)w.document.write('<img src="'+img+'" style="max-width:100%">');
+    const vRatio=video.videoWidth/video.videoHeight,displayRatio=overlay.width/overlay.height;
+    let sx,sy,sw,sh;
+    if(vRatio>displayRatio){sh=video.videoHeight;sw=sh*displayRatio;sx=(video.videoWidth-sw)/2;sy=0;}
+    else{sw=video.videoWidth;sh=sw/displayRatio;sx=0;sy=(video.videoHeight-sh)/2;}
+    cx.drawImage(video,sx,sy,sw,sh,0,0,c.width,c.height);
+    cx.drawImage(overlay,0,0,c.width,c.height);
+    const now=new Date();
+    const label=`${now.toLocaleDateString()} ${now.toLocaleTimeString()} | ${trueMag.toFixed(0)}×`;
+    cx.font='24px monospace';cx.fillStyle='white';cx.textAlign='right';
+    cx.fillText(label,c.width-20,c.height-20);
+    const link=document.createElement('a');
+    link.download=`Microscope_${now.toISOString().replace(/[:.]/g,'-')}.png`;
+    link.href=c.toDataURL('image/png');link.click();
   };
+
   exportBtn.onclick=()=>{
     if(!saved.length)return alert('No data');
     const csv='timestamp,mm,magnification\n'+saved.map(r=>`${r.time},${r.mm.toFixed(4)},${r.mag.toFixed(1)}`).join('\n');
-    const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='measurements.csv';a.click();
+    const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download='measurements.csv';a.click();
   };
 
   function updateList(){
@@ -267,90 +253,39 @@ freezeBtn.onclick = () => {
     });
   }
 
-function draw(){
-  ctx.clearRect(0,0,overlay.width,overlay.height);
-
-  // --- Draw all calibration & measurement points ---
-  for(let i=0;i<points.length;i++){
-    const p=points[i];
-    ctx.fillStyle=p.type==='cal'?'#ffb020':'#06b6d4';
-    ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();
-
-    if(i%2===1&&points[i-1]){
-      const a=points[i-1],b=points[i];
-      const dx=a.x-b.x,dy=a.y-b.y,pix=Math.hypot(dx,dy);
-      const mm=calibration.pxPerMm?pix/calibration.pxPerMm:null;
-      ctx.beginPath();
-      ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
-      ctx.strokeStyle=p.type==='cal'?'#ffb020':'#06b6d4';ctx.lineWidth=2;ctx.stroke();
-      ctx.fillStyle='#e6eef6';ctx.font='13px sans-serif';
-      ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
+  function draw(){
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    for(let i=0;i<points.length;i++){
+      const p=points[i];
+      ctx.fillStyle=p.type==='cal'?'#ffb020':'#06b6d4';
+      ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();
+      if(i%2===1&&points[i-1]){
+        const a=points[i-1],b=points[i],dx=a.x-b.x,dy=a.y-b.y,pix=Math.hypot(dx,dy);
+        const mm=calibration.pxPerMm?pix/calibration.pxPerMm:null;
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+        ctx.strokeStyle=p.type==='cal'?'#ffb020':'#06b6d4';ctx.lineWidth=2;ctx.stroke();
+        ctx.fillStyle='#e6eef6';ctx.font='13px sans-serif';
+        ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
+      }
     }
-  }
-
-  // --- Crosshair overlay ---
-  const centerX = overlay.width / 2;
-  const centerY = overlay.height / 2;
-  const tickSpacing = 10; // px spacing for tick marks
-  const tickLength = 4;
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 1;
-
-  // horizontal and vertical cross lines
-  ctx.beginPath();
-  ctx.moveTo(0, centerY);
-  ctx.lineTo(overlay.width, centerY);
-  ctx.moveTo(centerX, 0);
-  ctx.lineTo(centerX, overlay.height);
-  ctx.stroke();
-
-  // tick marks along the lines
-  ctx.beginPath();
-  for(let x = 0; x < overlay.width; x += tickSpacing){
-    ctx.moveTo(x, centerY - tickLength);
-    ctx.lineTo(x, centerY + tickLength);
-  }
-  for(let y = 0; y < overlay.height; y += tickSpacing){
-    ctx.moveTo(centerX - tickLength, y);
-    ctx.lineTo(centerX + tickLength, y);
-  }
-  ctx.stroke();
-
-  // --- Dynamic scale bar ---
-  if (calibration.pxPerMm) {
-    const barMm = 5; // 5 mm real size
-    const barPx = calibration.pxPerMm * barMm;
-    const margin = 20;
-    const y = overlay.height - margin;
-    const x1 = overlay.width - barPx - margin;
-    const x2 = overlay.width - margin;
-
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
+    const cx=overlay.width/2,cy=overlay.height/2,tickSpacing=10,tickLen=4;
+    ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(0,cy);ctx.lineTo(overlay.width,cy);
+    ctx.moveTo(cx,0);ctx.lineTo(cx,overlay.height);ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(x1, y);
-    ctx.lineTo(x2, y);
-    ctx.stroke();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${barMm} mm`, (x1 + x2) / 2, y - 8);
+    for(let x=0;x<overlay.width;x+=tickSpacing){ctx.moveTo(x,cy-tickLen);ctx.lineTo(x,cy+tickLen);}
+    for(let y=0;y<overlay.height;y+=tickSpacing){ctx.moveTo(cx-tickLen,y);ctx.lineTo(cx+tickLen,y);}ctx.stroke();
+    if(calibration.pxPerMm){
+      const barMm=5,barPx=calibration.pxPerMm*barMm,margin=20,y=overlay.height-margin,x1=overlay.width-barPx-margin,x2=overlay.width-margin;
+      ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText(`${barMm} mm`,(x1+x2)/2,y-8);
+    }
+    const now=new Date(),dateStr=now.toLocaleDateString(),timeStr=now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const zoomText=`${trueMag.toFixed(0)}×`;
+    ctx.fillStyle='#fff';ctx.font='12px monospace';ctx.textAlign='right';
+    ctx.fillText(`${dateStr}  ${timeStr}`,overlay.width-10,20);
+    ctx.fillText(`Zoom: ${zoomText}`,overlay.width-10,36);
   }
-
-  // --- Zoom and time/date overlay ---
-  const now = new Date();
-  const dateStr = now.toLocaleDateString();
-  const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  const zoomText = `${trueMag.toFixed(0)}×`;
-
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '12px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText(`${dateStr}  ${timeStr}`, overlay.width - 10, 20);
-  ctx.fillText(`Zoom: ${zoomText}`, overlay.width - 10, 36);
-}
 
   requestAnimationFrame(function loop(){draw();requestAnimationFrame(loop);});
 })();
