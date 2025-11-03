@@ -218,23 +218,34 @@
   };
   clearBtn.onclick=()=>{points=[];draw();};
 
-  captureBtn.onclick=()=>{
-    const c=document.createElement('canvas');
-    c.width=video.videoWidth;c.height=video.videoHeight;
-    const cx=c.getContext('2d');
-    const vRatio=video.videoWidth/video.videoHeight,displayRatio=overlay.width/overlay.height;
-    let sx,sy,sw,sh;
-    if(vRatio>displayRatio){sh=video.videoHeight;sw=sh*displayRatio;sx=(video.videoWidth-sw)/2;sy=0;}
-    else{sw=video.videoWidth;sh=sw/displayRatio;sx=0;sy=(video.videoHeight-sh)/2;}
-    cx.drawImage(video,sx,sy,sw,sh,0,0,c.width,c.height);
-    cx.drawImage(overlay,0,0,c.width,c.height);
-    const now=new Date();
-    const label=`${now.toLocaleDateString()} ${now.toLocaleTimeString()} | ${trueMag.toFixed(0)}×`;
-    cx.font='24px monospace';cx.fillStyle='white';cx.textAlign='right';
-    cx.fillText(label,c.width-20,c.height-20);
-    const link=document.createElement('a');
-    link.download=`Microscope_${now.toISOString().replace(/[:.]/g,'-')}.png`;
-    link.href=c.toDataURL('image/png');link.click();
+  captureBtn.onclick = () => {
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    const cx = c.getContext('2d');
+    const vRatio = video.videoWidth / video.videoHeight;
+    const displayRatio = overlay.width / overlay.height;
+    let sx, sy, sw, sh;
+    if (vRatio > displayRatio) {
+      sh = video.videoHeight;
+      sw = sh * displayRatio;
+      sx = (video.videoWidth - sw) / 2;
+      sy = 0;
+    } else {
+      sw = video.videoWidth;
+      sh = sw / displayRatio;
+      sx = 0;
+      sy = (video.videoHeight - sh) / 2;
+    }
+
+    cx.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    cx.drawImage(overlay, 0, 0, c.width, c.height);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const link = document.createElement('a');
+    link.download = `Microscope_${timestamp}.png`;
+    link.href = c.toDataURL('image/png');
+    link.click();
   };
 
   exportBtn.onclick=()=>{
