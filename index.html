@@ -5,24 +5,141 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Microscope + Measurement (v2.0 Responsive)</title>
 <style>
-  :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;}
-  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;}
-  body{background:linear-gradient(180deg,#071024 0%,#07192b 100%);color:#e6eef6;display:flex;align-items:center;justify-content:center;padding:12px;}
-  .app{width:100%;max-width:1100px;background:var(--card);border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6);}
-  header{display:flex;align-items:center;gap:12px}
-  h1{font-size:18px;margin:0}
-  .grid{display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}}
-  .viewer{position:relative;width:100%;aspect-ratio:4/3;background:#0b1220;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;}
-  video,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;}
-  .controls{display:flex;flex-direction:column;gap:8px;padding:8px}
-  .panel{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px}
-  .btn{background:var(--accent);color:#062024;padding:8px 10px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
-  .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
-  .measure-list{max-height:200px;overflow:auto;padding:6px;font-size:13px;border-radius:6px;background:rgba(0,0,0,0.15)}
-  .small{font-size:12px;color:var(--muted)}
-  footer{font-size:12px;color:var(--muted);margin-top:8px}
+:root {
+  --bg: #0f1724;
+  --card: #0b1220;
+  --accent: #06b6d4;
+  --muted: #94a3b8;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: Inter, system-ui, Segoe UI, Roboto, Helvetica, Arial;
+  background: linear-gradient(180deg, #071024 0%, #07192b 100%);
+  color: #e6eef6;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 10px;
+  box-sizing: border-box;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(2,6,23,0.6);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+h1 { font-size: 18px; margin: 0; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 12px;
+  margin-top: 12px;
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+.viewer {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+}
+
+video,
+canvas.overlay,
+canvas#frozenFrame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.panel {
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.btn {
+  background: var(--accent);
+  color: #062024;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn.secondary {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--muted);
+}
+
+.measure-list {
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px;
+  font-size: 13px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.15);
+}
+
+.small { font-size: 12px; color: var(--muted); }
+
+footer {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .viewer {
+    width: 100%;
+    height: 60vh; /* Takes 60% of mobile screen height */
+    aspect-ratio: auto;
+  }
+  .app {
+    padding: 5px;
+  }
+  .controls {
+    gap: 6px;
+  }
+}
 </style>
+
 </head>
 <body>
 <div class="app">
@@ -98,6 +215,7 @@
         frozenCanvas=document.getElementById('frozenFrame'),
         ctx=overlay.getContext('2d'),
         frozenCtx=frozenCanvas.getContext('2d');
+
   const freezeBtn=document.getElementById('freezeBtn'),
         zoomRange=document.getElementById('zoomRange'),
         zoomDisplay=document.getElementById('zoomDisplay'),
@@ -114,7 +232,9 @@
         zoomInBtn=document.getElementById('zoomInBtn'),
         measureListEl=document.getElementById('measureList');
 
-  let stream=null,isFrozen=false,currentMode=null,calibration={pixels:null,mm:null,pxPerMm:null},points=[],saved=[],trueMag=1;
+  let stream=null,isFrozen=false,currentMode=null,
+      calibration={pixels:null,mm:null,pxPerMm:null},
+      points=[],saved=[],trueMag=1;
 
   function fitCanvas(){
     const w=overlay.clientWidth,h=overlay.clientHeight;
@@ -122,55 +242,103 @@
   }
 
   async function startCamera(){
-    try{
-      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      video.srcObject=stream;
-      video.addEventListener('loadedmetadata',()=>{fitCanvas();video.play();});
-    }catch(e){alert('Camera access error: '+e.message);}
-  }
-  await startCamera();
-
-  freezeBtn.onclick=()=>{
-    if(!isFrozen){
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 960 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+      video.muted = true;
+      video.setAttribute('playsinline', true);
+      await video.play();
       fitCanvas();
-      const vRatio=video.videoWidth/video.videoHeight,boxRatio=video.clientWidth/video.clientHeight;
-      let sx,sy,sw,sh;
-      if(vRatio>boxRatio){sh=video.videoHeight;sw=sh*boxRatio;sx=(video.videoWidth-sw)/2;sy=0;}
-      else{sw=video.videoWidth;sh=sw/boxRatio;sx=0;sy=(video.videoHeight-sh)/2;}
-      frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
-      frozenCtx.drawImage(video,sx,sy,sw,sh,0,0,frozenCanvas.width,frozenCanvas.height);
-      frozenCanvas.style.display='block';video.style.display='none';
-      freezeBtn.textContent='Unfreeze';isFrozen=true;
-    }else{
-      frozenCanvas.style.display='none';video.style.display='block';
-      freezeBtn.textContent='Freeze';isFrozen=false;
+    } catch (err) {
+      console.error("Camera access error:", err);
+      alert("Camera access blocked or unavailable. Please allow permissions.");
+    }
+  }
+
+  // Safari/iOS requires user interaction
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    try {
+      await startCamera();
+    } catch {
+      const btn = document.createElement('button');
+      btn.textContent = "Start Camera";
+      btn.className = "btn";
+      btn.style.margin = "12px auto";
+      document.querySelector('.viewer').appendChild(btn);
+      btn.onclick = async () => {
+        btn.remove();
+        await startCamera();
+      };
+    }
+  } else {
+    alert("Camera not supported on this device.");
+  }
+
+  // --- Freeze/unfreeze ---
+  freezeBtn.onclick = () => {
+    if (!isFrozen) {
+      fitCanvas();
+      const vRatio = video.videoWidth / video.videoHeight;
+      const boxRatio = video.clientWidth / video.clientHeight;
+      let sx, sy, sw, sh;
+      if (vRatio > boxRatio) {
+        sh = video.videoHeight;
+        sw = sh * boxRatio;
+        sx = (video.videoWidth - sw) / 2;
+        sy = 0;
+      } else {
+        sw = video.videoWidth;
+        sh = sw / boxRatio;
+        sx = 0;
+        sy = (video.videoHeight - sh) / 2;
+      }
+      frozenCtx.clearRect(0, 0, frozenCanvas.width, frozenCanvas.height);
+      frozenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, frozenCanvas.width, frozenCanvas.height);
+      frozenCanvas.style.display = 'block';
+      video.style.display = 'none';
+      freezeBtn.textContent = 'Unfreeze';
+      isFrozen = true;
+    } else {
+      frozenCanvas.style.display = 'none';
+      video.style.display = 'block';
+      freezeBtn.textContent = 'Freeze';
+      isFrozen = false;
     }
   };
 
-  zoomRange.addEventListener('input',updateZoom);
-  zoomOutBtn.onclick=()=>{zoomRange.value=Math.max(1,Number(zoomRange.value)-0.5);updateZoom();};
-  zoomInBtn.onclick=()=>{zoomRange.value=Math.min(64,Number(zoomRange.value)+0.5);updateZoom();};
+  // --- Zoom control ---
+  zoomRange.addEventListener('input', updateZoom);
+  zoomOutBtn.onclick = () => { zoomRange.value = Math.max(1, Number(zoomRange.value) - 0.5); updateZoom(); };
+  zoomInBtn.onclick = () => { zoomRange.value = Math.min(64, Number(zoomRange.value) + 0.5); updateZoom(); };
 
   function updateZoom(){
-    const z=Number(zoomRange.value);
-    video.style.transform=`scale(${z})`;
-    frozenCanvas.style.transform=`scale(${z})`;
-    zoomDisplay.textContent=z.toFixed(1)+'×';
+    const z = Number(zoomRange.value);
+    video.style.transform = `scale(${z})`;
+    frozenCanvas.style.transform = `scale(${z})`;
+    zoomDisplay.textContent = z.toFixed(1) + '×';
     updateMagnification();
   }
 
   function updateMagnification(){
     if(!calibration.pxPerMm){trueMagEl.textContent='—';trueMag=1;return;}
-    const screenPPI=window.devicePixelRatio*96,screenPxPerMm=screenPPI/25.4;
-    trueMag=(calibration.pxPerMm/screenPxPerMm)*Number(zoomRange.value);
-    trueMagEl.textContent=trueMag.toFixed(1)+'×';
+    const screenPPI = window.devicePixelRatio * 96;
+    const screenPxPerMm = screenPPI / 25.4;
+    trueMag = (calibration.pxPerMm / screenPxPerMm) * Number(zoomRange.value);
+    trueMagEl.textContent = trueMag.toFixed(1) + '×';
   }
 
   function clientToCanvas(e){
-    const r=overlay.getBoundingClientRect();
-    const x=((e.touches?e.touches[0].clientX:e.clientX)-r.left)*(overlay.width/r.width);
-    const y=((e.touches?e.touches[0].clientY:e.clientY)-r.top)*(overlay.height/r.height);
-    return{x,y};
+    const r = overlay.getBoundingClientRect();
+    const x = ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) * (overlay.width / r.width);
+    const y = ((e.touches ? e.touches[0].clientY : e.clientY) - r.top) * (overlay.height / r.height);
+    return {x, y};
   }
 
   let dragging=null;
@@ -188,10 +356,10 @@
           calibration={pixels:pix,mm:Number(real),pxPerMm:pix/Number(real)};
           pxPerMmEl.textContent=calibration.pxPerMm.toFixed(3)+' px/mm';
           updateMagnification();
-        }else alert('Invalid input');
+        } else alert('Invalid input');
         currentMode=null;calModeBtn.textContent='Enter Calibrate Mode';
       }
-    }else if(currentMode==='measure'){
+    } else if(currentMode==='measure'){
       points.push({x:p.x,y:p.y,type:'meas'});
       const m=points.filter(pt=>pt.type==='meas');
       if(m.length===2){
@@ -209,37 +377,31 @@
   calModeBtn.onclick=()=>{currentMode=currentMode==='calibrate'?null:'calibrate';calModeBtn.textContent=currentMode?'Exit Calibrate Mode':'Enter Calibrate Mode';};
   measureModeBtn.onclick=()=>{currentMode=currentMode==='measure'?null:'measure';measureModeBtn.textContent=currentMode?'Exit Measure Mode':'Measure';};
   resetCalBtn.onclick=()=>{calibration={pixels:null,mm:null,pxPerMm:null};pxPerMmEl.textContent='—';trueMagEl.textContent='—';points=points.filter(p=>p.type!=='cal');draw();};
-  saveMeasureBtn.onclick=()=>{
-    const m=points.filter(p=>p.type==='meas');
-    if(m.length<2)return alert('Place two points');
-    if(!calibration.pxPerMm)return alert('Calibrate first');
-    const dx=m[0].x-m[1].x,dy=m[0].y-m[1].y,pix=Math.hypot(dx,dy),mm=pix/calibration.pxPerMm;
-    saved.push({time:new Date().toISOString(),mm,mag:trueMag});updateList();
-  };
   clearBtn.onclick=()=>{points=[];draw();};
 
   captureBtn.onclick = () => {
+    const baseW = 1280, baseH = 960;
     const c = document.createElement('canvas');
-    c.width = video.videoWidth;
-    c.height = video.videoHeight;
+    c.width = baseW; c.height = baseH;
     const cx = c.getContext('2d');
-    const vRatio = video.videoWidth / video.videoHeight;
-    const displayRatio = overlay.width / overlay.height;
+
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const targetRatio = baseW / baseH;
     let sx, sy, sw, sh;
-    if (vRatio > displayRatio) {
+    if (videoRatio > targetRatio) {
       sh = video.videoHeight;
-      sw = sh * displayRatio;
+      sw = sh * targetRatio;
       sx = (video.videoWidth - sw) / 2;
       sy = 0;
     } else {
       sw = video.videoWidth;
-      sh = sw / displayRatio;
+      sh = sw / targetRatio;
       sx = 0;
       sy = (video.videoHeight - sh) / 2;
     }
 
-    cx.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
-    cx.drawImage(overlay, 0, 0, c.width, c.height);
+    cx.drawImage(video, sx, sy, sw, sh, 0, 0, baseW, baseH);
+    cx.drawImage(overlay, 0, 0, baseW, baseH);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const link = document.createElement('a');
@@ -247,22 +409,6 @@
     link.href = c.toDataURL('image/png');
     link.click();
   };
-
-  exportBtn.onclick=()=>{
-    if(!saved.length)return alert('No data');
-    const csv='timestamp,mm,magnification\n'+saved.map(r=>`${r.time},${r.mm.toFixed(4)},${r.mag.toFixed(1)}`).join('\n');
-    const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);a.download='measurements.csv';a.click();
-  };
-
-  function updateList(){
-    measureListEl.innerHTML='';
-    saved.forEach((m,i)=>{
-      const d=document.createElement('div');
-      d.textContent=`${i+1}. ${m.mm.toFixed(3)} mm @ ${m.mag.toFixed(1)}× — ${m.time}`;
-      measureListEl.appendChild(d);
-    });
-  }
 
   function draw(){
     ctx.clearRect(0,0,overlay.width,overlay.height);
@@ -291,15 +437,11 @@
       ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();
       ctx.fillStyle='#fff';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText(`${barMm} mm`,(x1+x2)/2,y-8);
     }
-    const now=new Date(),dateStr=now.toLocaleDateString(),timeStr=now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    const zoomText=`${trueMag.toFixed(0)}×`;
-    ctx.fillStyle='#fff';ctx.font='12px monospace';ctx.textAlign='right';
-    ctx.fillText(`${dateStr}  ${timeStr}`,overlay.width-10,20);
-    ctx.fillText(`Zoom: ${zoomText}`,overlay.width-10,36);
   }
 
   requestAnimationFrame(function loop(){draw();requestAnimationFrame(loop);});
 })();
 </script>
+
 </body>
 </html>
