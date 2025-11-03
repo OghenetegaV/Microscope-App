@@ -267,22 +267,91 @@ freezeBtn.onclick = () => {
     });
   }
 
-  function draw(){
-    ctx.clearRect(0,0,overlay.width,overlay.height);
-    for(let i=0;i<points.length;i++){
-      const p=points[i];
-      ctx.fillStyle=p.type==='cal'?'#ffb020':'#06b6d4';
-      ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();
-      if(i%2===1&&points[i-1]){
-        const a=points[i-1],b=points[i];const dx=a.x-b.x,dy=a.y-b.y,pix=Math.hypot(dx,dy);
-        const mm=calibration.pxPerMm?pix/calibration.pxPerMm:null;
-        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
-        ctx.strokeStyle=p.type==='cal'?'#ffb020':'#06b6d4';ctx.lineWidth=2;ctx.stroke();
-        ctx.fillStyle='#e6eef6';ctx.font='14px sans-serif';
-        ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
-      }
+function draw(){
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+
+  // --- Draw all calibration & measurement points ---
+  for(let i=0;i<points.length;i++){
+    const p=points[i];
+    ctx.fillStyle=p.type==='cal'?'#ffb020':'#06b6d4';
+    ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();
+
+    if(i%2===1&&points[i-1]){
+      const a=points[i-1],b=points[i];
+      const dx=a.x-b.x,dy=a.y-b.y,pix=Math.hypot(dx,dy);
+      const mm=calibration.pxPerMm?pix/calibration.pxPerMm:null;
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+      ctx.strokeStyle=p.type==='cal'?'#ffb020':'#06b6d4';ctx.lineWidth=2;ctx.stroke();
+      ctx.fillStyle='#e6eef6';ctx.font='13px sans-serif';
+      ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
     }
   }
+
+  // --- Crosshair overlay ---
+  const centerX = overlay.width / 2;
+  const centerY = overlay.height / 2;
+  const tickSpacing = 10; // px spacing for tick marks
+  const tickLength = 4;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+
+  // horizontal and vertical cross lines
+  ctx.beginPath();
+  ctx.moveTo(0, centerY);
+  ctx.lineTo(overlay.width, centerY);
+  ctx.moveTo(centerX, 0);
+  ctx.lineTo(centerX, overlay.height);
+  ctx.stroke();
+
+  // tick marks along the lines
+  ctx.beginPath();
+  for(let x = 0; x < overlay.width; x += tickSpacing){
+    ctx.moveTo(x, centerY - tickLength);
+    ctx.lineTo(x, centerY + tickLength);
+  }
+  for(let y = 0; y < overlay.height; y += tickSpacing){
+    ctx.moveTo(centerX - tickLength, y);
+    ctx.lineTo(centerX + tickLength, y);
+  }
+  ctx.stroke();
+
+  // --- Dynamic scale bar ---
+  if (calibration.pxPerMm) {
+    const barMm = 5; // 5 mm real size
+    const barPx = calibration.pxPerMm * barMm;
+    const margin = 20;
+    const y = overlay.height - margin;
+    const x1 = overlay.width - barPx - margin;
+    const x2 = overlay.width - margin;
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.lineTo(x2, y);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${barMm} mm`, (x1 + x2) / 2, y - 8);
+  }
+
+  // --- Zoom and time/date overlay ---
+  const now = new Date();
+  const dateStr = now.toLocaleDateString();
+  const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  const zoomText = `${trueMag.toFixed(0)}×`;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${dateStr}  ${timeStr}`, overlay.width - 10, 20);
+  ctx.fillText(`Zoom: ${zoomText}`, overlay.width - 10, 36);
+}
+
   requestAnimationFrame(function loop(){draw();requestAnimationFrame(loop);});
 })();
 </script>
