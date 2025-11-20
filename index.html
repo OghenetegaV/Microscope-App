@@ -202,6 +202,7 @@ canvas.overlay,canvas#frozenFrame{background:transparent !important;z-index:1}
           calibration = { pixels: pix/zoom, mm: Number(real), pxPerMm: (pix/Number(real))/zoom };
           pxPerMmEl.textContent = calibration.pxPerMm.toFixed(4) + ' px/mm';
           updateMagnification();
+          video.play().catch(()=>{});
         } else alert('Invalid input');
         currentMode = null; calModeBtn.textContent = 'Enter Calibrate Mode';
         // clear cal points
@@ -261,7 +262,21 @@ canvas.overlay,canvas#frozenFrame{background:transparent !important;z-index:1}
     let sx, sy, sw, sh;
     if(videoRatio > targetRatio){ sh = video.videoHeight; sw = sh * targetRatio; sx = (video.videoWidth - sw)/2; sy = 0; }
     else { sw = video.videoWidth; sh = sw / targetRatio; sx = 0; sy = (video.videoHeight - sh)/2; }
-    cx.drawImage(video, sx, sy, sw, sh, 0, 0, baseW, baseH);
+    // temporarily remove transforms for iPhone capture
+    const prevTransformVideo = video.style.transform;
+    const prevTransformFrozen = frozenCanvas.style.transform;
+    video.style.transform = "none";
+    frozenCanvas.style.transform = "none";
+
+    // force reflow
+    void video.offsetHeight;
+
+    cx.drawImage(isFrozen ? frozenCanvas : video, sx, sy, sw, sh, 0, 0, baseW, baseH);
+
+    // restore zoom transform
+    video.style.transform = prevTransformVideo;
+    frozenCanvas.style.transform = prevTransformFrozen;
+
     // draw overlay scaled to capture size
     cx.drawImage(overlay, 0, 0, baseW, baseH);
     const timestamp = new Date().toISOString().replace(/[:.]/g,'-');
