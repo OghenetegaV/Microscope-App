@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Microscope + Measurement (v2.2 — Fixed 4:3)</title>
+<title>Microscope + Measurement (v2.2)</title>
 <style>
 :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8}
 html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#071024 0%,#07192b 100%);color:#e6eef6}
@@ -14,8 +14,9 @@ h1{font-size:18px;margin:0}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
 .viewer{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-height:80vh;min-height:320px}
 .video-box{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-video,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-video{z-index:0;background:#000}
+video,canvas#videoCanvas,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+video{z-index:0;background:#000;display:none} /* actual <video> element kept but hidden; we draw it into videoCanvas */
+canvas#videoCanvas{z-index:0;background:#000}
 canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 .controls{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:10px}
 .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:8px}
@@ -41,7 +42,9 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       <div class="viewer" id="viewer">
         <div class="measure-readout" id="liveReadout">No measurement</div>
         <div class="video-box">
+          <!-- actual video kept hidden; videoCanvas displays the real-time zoomed feed -->
           <video id="video" playsinline muted></video>
+          <canvas id="videoCanvas"></canvas>
           <canvas id="frozenFrame"></canvas>
           <canvas id="overlay" class="overlay"></canvas>
           <button id="startCameraBtn" class="btn start-camera" style="display:none">Start Camera</button>
@@ -103,10 +106,13 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 <script>
 (async function(){
   const video = document.getElementById('video'),
+        videoCanvas = document.getElementById('videoCanvas'),
         overlay = document.getElementById('overlay'),
         frozenCanvas = document.getElementById('frozenFrame'),
         viewer = document.getElementById('viewer'),
-        startCameraBtn = document.getElementById('startCameraBtn'),
+        startCameraBtn = document.getElementById('startCameraBtn');
+
+  const vctx = videoCanvas.getContext('2d'),
         ctx = overlay.getContext('2d'),
         frozenCtx = frozenCanvas.getContext('2d');
 
@@ -131,13 +137,15 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
   let calibration = { pixels:null, mm:null, pxPerMm:null }; // px/mm at zoom=1
   let points = [], saved = [], trueMag = 1;
   let zoom = 1; // digital crop factor
-  window.addEventListener('resize', fitCanvas);
 
+  // ensure canvas sizes follow layout
   function fitCanvas(){
     const w = overlay.clientWidth, h = overlay.clientHeight;
-    [overlay, frozenCanvas].forEach(c => { c.width = w; c.height = h; });
+    [overlay, frozenCanvas, videoCanvas].forEach(c => { c.width = w; c.height = h; });
   }
+  window.addEventListener('resize', fitCanvas);
 
+  // start camera, keep <video> but hide it; we draw into videoCanvas
   async function initStream(){
     try{
       if(stream) stream.getTracks().forEach(t=>t.stop());
@@ -145,6 +153,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       video.srcObject = stream;
       video.setAttribute('playsinline', true);
       video.muted = true;
+      // play then hide video element - canvas will show feed
       video.addEventListener('loadedmetadata', ()=>{ fitCanvas(); startCameraBtn.style.display = 'none'; });
       await video.play();
       fitCanvas();
@@ -158,7 +167,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 
   await initStream();
 
-  // compute visible crop (object-fit:cover) then apply zoom crop
+  // compute visible crop (object-fit:cover) then apply zoom crop on actual video pixels
   function computeVideoCrop(){
     const vw = video.videoWidth, vh = video.videoHeight;
     const elW = video.clientWidth, elH = video.clientHeight;
@@ -176,11 +185,26 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
     return { sx: sxZoom, sy: syZoom, sw: swZoom, sh: shZoom };
   }
 
+  // draw video frame into videoCanvas (zoomed in real-time)
+  function drawVideoToCanvas(){
+    if(!video.videoWidth || !video.videoHeight) return;
+    const crop = computeVideoCrop();
+    // draw portion of real video into videoCanvas (destination: full canvas)
+    vctx.clearRect(0,0,videoCanvas.width,videoCanvas.height);
+    try {
+      vctx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, videoCanvas.width, videoCanvas.height);
+    } catch(e){
+      // sometimes drawing too early causes exceptions; ignore and retry next frame
+    }
+  }
+
   function updateZoom(){
     zoom = Number(zoomRange.value);
     zoomDisplay.textContent = zoom.toFixed(1) + '×';
     updateMagnification();
-    draw(); // refresh overlay (scale bar depends on zoom)
+    // immediately update the live canvas to reflect new zoom
+    drawVideoToCanvas();
+    draw(); // update overlay
   }
   zoomRange.addEventListener('input', updateZoom);
   zoomOutBtn.onclick = ()=>{ zoomRange.value = Math.max(1, Number(zoomRange.value)-0.5); updateZoom(); };
@@ -217,7 +241,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
         const dx = c[0].x - c[1].x, dy = c[0].y - c[1].y, pixDisplay = Math.hypot(dx,dy);
         const real = prompt('Enter real distance (mm):');
         if(real && !isNaN(real) && Number(real)>0){
-          // store pxPerMm at zoom=1
+          // store pxPerMm at zoom=1 (so we divide by current zoom)
           calibration = { pixels: (pixDisplay / zoom), mm: Number(real), pxPerMm: (pixDisplay/Number(real))/zoom };
           pxPerMmEl.textContent = calibration.pxPerMm.toFixed(4) + ' px/mm';
           updateMagnification();
@@ -254,27 +278,33 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 
   function updateList(){ measureListEl.innerHTML=''; saved.forEach((r,i)=>{ const d=document.createElement('div'); d.textContent=`${i+1}. ${r.mm.toFixed(3)} mm @ ${r.mag.toFixed(1)}× — ${r.time}`; measureListEl.appendChild(d); }); }
 
-  // Freeze logic: draw visible crop to frozenCanvas (pixel-perfect)
+  // Freeze logic: copy the currently displayed videoCanvas (zoomed) to frozenCanvas
   freezeBtn.onclick = ()=>{
     if(!isFrozen){
       fitCanvas();
-      const crop = computeVideoCrop();
+      // copy videoCanvas content (already zoomed) to frozen canvas
       frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
-      frozenCtx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, frozenCanvas.width, frozenCanvas.height);
-      frozenCanvas.style.display='block'; video.style.display='none'; isFrozen = true; freezeBtn.textContent='Unfreeze';
+      frozenCtx.drawImage(videoCanvas, 0, 0, videoCanvas.width, videoCanvas.height, 0, 0, frozenCanvas.width, frozenCanvas.height);
+      frozenCanvas.style.display='block'; videoCanvas.style.display='none'; isFrozen = true; freezeBtn.textContent='Unfreeze';
     } else {
-      frozenCanvas.style.display='none'; video.style.display='block'; isFrozen=false; freezeBtn.textContent='Freeze';
+      frozenCanvas.style.display='none'; videoCanvas.style.display='block'; isFrozen=false; freezeBtn.textContent='Freeze';
     }
   };
 
-  // Capture: draw zoomed crop (same method used for freeze) then overlay; works on iPhone
+  // Capture: use the same crop calculation to draw the high-res capture from the real video pixels,
+  // then overlay. This produces a high-res saved image matching the live view.
   captureBtn.onclick = ()=>{
     const baseW = 2048, baseH = 1536; // high-res 4:3 base
     const c = document.createElement('canvas'); c.width = baseW; c.height = baseH;
     const cx = c.getContext('2d');
     const crop = computeVideoCrop();
-    // draw actual video pixels for crop -> avoid CSS transforms
-    cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
+    // draw the real video pixels for crop -> avoid CSS transforms
+    try {
+      cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
+    } catch(e){
+      // fallback: draw the current canvas if drawImage(video,...) fails (some browsers)
+      cx.drawImage(videoCanvas, 0, 0, videoCanvas.width, videoCanvas.height, 0, 0, baseW, baseH);
+    }
     // draw overlay scaled to capture resolution
     cx.drawImage(overlay, 0, 0, baseW, baseH);
     const ts = new Date().toISOString().replace(/[:.]/g,'-');
@@ -287,7 +317,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
     const blob = new Blob([csv],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='measurements.csv'; a.click();
   };
 
-  // main overlay draw
+  // overlay draw
   function draw(){
     ctx.clearRect(0,0,overlay.width,overlay.height);
 
@@ -338,10 +368,12 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
     } else if(meas.length===1) liveReadout.textContent = 'Place second point'; else liveReadout.textContent='No measurement';
   }
 
-  // computeVideoCrop used inline when capturing/freezing
-
-  // start animation
-  requestAnimationFrame(function loop(){ draw(); requestAnimationFrame(loop); });
+  // main loop: update videoCanvas then overlay
+  (function loop(){
+    if(!isFrozen) drawVideoToCanvas(); // keep drawing live when not frozen
+    draw(); // overlay updates regardless
+    requestAnimationFrame(loop);
+  })();
 
 })();
 </script>
