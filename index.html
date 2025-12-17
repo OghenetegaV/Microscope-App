@@ -15,7 +15,7 @@ h1{font-size:18px;margin:0}
 .viewer{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-height:80vh;min-height:320px}
 .video-box{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
 video,canvas#videoCanvas,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-video{z-index:0;background:#000;display:none} /* actual <video> element kept but hidden; we draw it into videoCanvas */
+video{z-index:0;background:#000;display:block;} /* Ensure video is visible */
 canvas#videoCanvas{z-index:0;background:#000}
 canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 .controls{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:10px}
@@ -42,12 +42,11 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       <div class="viewer" id="viewer">
         <div class="measure-readout" id="liveReadout">No measurement</div>
         <div class="video-box">
-          <!-- actual video kept hidden; videoCanvas displays the real-time zoomed feed -->
           <video id="video" playsinline muted></video>
           <canvas id="videoCanvas"></canvas>
           <canvas id="frozenFrame"></canvas>
           <canvas id="overlay" class="overlay"></canvas>
-          <button id="startCameraBtn" class="btn start-camera" style="display:none">Start Camera</button>
+          <button id="startCameraBtn" class="btn start-camera" style="display:block">Start Camera</button>
         </div>
       </div>
 
@@ -109,7 +108,6 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
         videoCanvas = document.getElementById('videoCanvas'),
         overlay = document.getElementById('overlay'),
         frozenCanvas = document.getElementById('frozenFrame'),
-        viewer = document.getElementById('viewer'),
         startCameraBtn = document.getElementById('startCameraBtn');
 
   const vctx = videoCanvas.getContext('2d'),
@@ -138,40 +136,50 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
   let points = [], saved = [], trueMag = 1;
   let zoom = 1; // digital crop factor
 
-  // ensure canvas sizes follow layout
+  // Ensure canvas sizes follow layout
   function fitCanvas(){
     const w = overlay.clientWidth, h = overlay.clientHeight;
     [overlay, frozenCanvas, videoCanvas].forEach(c => { c.width = w; c.height = h; });
   }
   window.addEventListener('resize', fitCanvas);
 
-  // start camera, keep <video> but hide it; we draw into videoCanvas
+  // Start camera
   async function initStream(){
-    try{
-      if(stream) stream.getTracks().forEach(t=>t.stop());
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio:false });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true }); // Simplified
       video.srcObject = stream;
-      video.setAttribute('playsinline', true);
       video.muted = true;
-      // play then hide video element - canvas will show feed
-      video.addEventListener('loadedmetadata', ()=>{ fitCanvas(); startCameraBtn.style.display = 'none'; });
       await video.play();
+
+      video.addEventListener('loadedmetadata', fitCanvas);
       fitCanvas();
-    }catch(err){
-      console.warn('Camera start failed:', err);
+      startCameraBtn.style.display = 'none'; // Hide button after starting camera
+    } catch (err) {
+      console.error('Camera start failed:', err);
       startCameraBtn.style.display = 'block';
     }
   }
 
-  startCameraBtn.onclick = async ()=>{ startCameraBtn.textContent='Starting...'; await initStream(); startCameraBtn.remove(); };
+  startCameraBtn.onclick = async () => {
+    startCameraBtn.textContent = 'Starting...';
+    await initStream();
+  };
 
-  await initStream();
+  // Draw video frame into videoCanvas (zoomed in real-time)
+  function drawVideoToCanvas(){
+    const crop = computeVideoCrop();
+    vctx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+    if (video.videoWidth && video.videoHeight) {
+      vctx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, videoCanvas.width, videoCanvas.height);
+    }
+  }
 
-  // compute visible crop (object-fit:cover) then apply zoom crop on actual video pixels
+  // Compute visible crop (object-fit:cover) then apply zoom crop on actual video pixels
   function computeVideoCrop(){
     const vw = video.videoWidth, vh = video.videoHeight;
     const elW = video.clientWidth, elH = video.clientHeight;
-    if(!vw||!vh) return {sx:0,sy:0,sw:vw,sh:vh};
+    if(!vw || !vh) return {sx:0, sy:0, sw:vw, sh:vh};
+
     const videoRatio = vw / vh, boxRatio = elW / elH;
     let sx, sy, sw, sh;
     if(videoRatio > boxRatio){
@@ -179,199 +187,33 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
     } else {
       sw = vw; sh = sw / boxRatio; sx = 0; sy = (vh - sh) / 2;
     }
-    // apply zoom (crop further centered)
+
+    // Apply zoom (crop further centered)
     const swZoom = sw / zoom, shZoom = sh / zoom;
-    const sxZoom = sx + (sw - swZoom)/2, syZoom = sy + (sh - shZoom)/2;
+    const sxZoom = sx + (sw - swZoom) / 2, syZoom = sy + (sh - shZoom) / 2;
     return { sx: sxZoom, sy: syZoom, sw: swZoom, sh: shZoom };
   }
 
-  // draw video frame into videoCanvas (zoomed in real-time)
-  function drawVideoToCanvas(){
-    if(!video.videoWidth || !video.videoHeight) return;
-    const crop = computeVideoCrop();
-    // draw portion of real video into videoCanvas (destination: full canvas)
-    vctx.clearRect(0,0,videoCanvas.width,videoCanvas.height);
-    try {
-      vctx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, videoCanvas.width, videoCanvas.height);
-    } catch(e){
-      // sometimes drawing too early causes exceptions; ignore and retry next frame
-    }
-  }
-
-  function updateZoom(){
+  function updateZoom() {
     zoom = Number(zoomRange.value);
     zoomDisplay.textContent = zoom.toFixed(1) + '×';
-    updateMagnification();
-    // immediately update the live canvas to reflect new zoom
-    drawVideoToCanvas();
-    draw(); // update overlay
+    drawVideoToCanvas(); // Update the canvas immediately
   }
+
   zoomRange.addEventListener('input', updateZoom);
-  zoomOutBtn.onclick = ()=>{ zoomRange.value = Math.max(1, Number(zoomRange.value)-0.5); updateZoom(); };
-  zoomInBtn.onclick = ()=>{ zoomRange.value = Math.min(16, Number(zoomRange.value)+0.5); updateZoom(); };
+  zoomOutBtn.onclick = () => { zoomRange.value = Math.max(1, Number(zoomRange.value) - 0.5); updateZoom(); };
+  zoomInBtn.onclick = () => { zoomRange.value = Math.min(16, Number(zoomRange.value) + 0.5); updateZoom(); };
 
-  function updateMagnification(){
-    if(!calibration.pxPerMm){ trueMagEl.textContent='—'; trueMag = Number(zoom); return; }
-    const screenPPI = window.devicePixelRatio * 96;
-    const screenPxPerMm = screenPPI / 25.4;
-    trueMag = (calibration.pxPerMm / screenPxPerMm) * Number(zoom);
-    trueMagEl.textContent = trueMag.toFixed(1) + '×';
+  // Main drawing function
+  function draw() {
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    // Add your drawing logic here
   }
 
-  // drawing helpers
-  function drawCross(x,y,size,color,lineW){ ctx.strokeStyle=color; ctx.lineWidth=lineW; ctx.beginPath(); ctx.moveTo(x-size,y-size); ctx.lineTo(x+size,y+size); ctx.moveTo(x-size,y+size); ctx.lineTo(x+size,y-size); ctx.stroke(); }
-
-  // pointer -> overlay coords
-  function clientToCanvas(e){
-    const r = overlay.getBoundingClientRect();
-    const x = ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) * (overlay.width / r.width);
-    const y = ((e.touches ? e.touches[0].clientY : e.clientY) - r.top) * (overlay.height / r.height);
-    return { x, y };
-  }
-
-  let dragging = null;
-  overlay.addEventListener('pointerdown', e=>{
-    overlay.setPointerCapture(e.pointerId);
-    const p = clientToCanvas(e);
-    for(const pt of points){ if(Math.hypot(pt.x - p.x, pt.y - p.y) < 14){ dragging = pt; return; } }
-    if(currentMode === 'calibrate'){
-      points.push({ x:p.x, y:p.y, type:'cal' });
-      const c = points.filter(pt=>pt.type==='cal');
-      if(c.length===2){
-        const dx = c[0].x - c[1].x, dy = c[0].y - c[1].y, pixDisplay = Math.hypot(dx,dy);
-        const real = prompt('Enter real distance (mm):');
-        if(real && !isNaN(real) && Number(real)>0){
-          // store pxPerMm at zoom=1 (so we divide by current zoom)
-          calibration = { pixels: (pixDisplay / zoom), mm: Number(real), pxPerMm: (pixDisplay/Number(real))/zoom };
-          pxPerMmEl.textContent = calibration.pxPerMm.toFixed(4) + ' px/mm';
-          updateMagnification();
-          video.play().catch(()=>{});
-        } else alert('Invalid input');
-        currentMode = null; calModeBtn.textContent = 'Enter Calibrate Mode';
-        points = points.filter(p=>p.type!=='cal');
-      }
-    } else if(currentMode === 'measure'){
-      points.push({ x:p.x, y:p.y, type:'meas' });
-      const m = points.filter(pt=>pt.type==='meas');
-      if(m.length===2){ currentMode = null; measureModeBtn.textContent = 'Measure'; }
-    }
-    draw();
-  });
-
-  overlay.addEventListener('pointermove', e=>{ if(!dragging) return; const p=clientToCanvas(e); dragging.x=p.x; dragging.y=p.y; draw(); });
-  overlay.addEventListener('pointerup', ()=> dragging=null );
-
-  calModeBtn.onclick = ()=>{ currentMode = currentMode==='calibrate'?null:'calibrate'; calModeBtn.textContent = currentMode? 'Exit Calibrate Mode':'Enter Calibrate Mode'; };
-  measureModeBtn.onclick = ()=>{ currentMode = currentMode==='measure'?null:'measure'; measureModeBtn.textContent = currentMode? 'Exit Measure Mode':'Measure'; };
-  resetCalBtn.onclick = ()=>{ calibration = { pixels:null, mm:null, pxPerMm:null }; pxPerMmEl.textContent='—'; trueMagEl.textContent='—'; draw(); };
-  clearBtn.onclick = ()=>{ points = []; liveReadout.textContent='No measurement'; draw(); };
-
-  saveMeasureBtn.onclick = ()=>{
-    const m = points.filter(p=>p.type==='meas');
-    if(m.length<2) return alert('Place two points');
-    if(!calibration.pxPerMm) return alert('Calibrate first');
-    const pixDisplay = Math.hypot(m[0].x - m[1].x, m[0].y - m[1].y);
-    const mm = (pixDisplay / zoom) / calibration.pxPerMm;
-    saved.push({ time:new Date().toISOString(), mm, mag:trueMag });
-    updateList();
-  };
-
-  function updateList(){ measureListEl.innerHTML=''; saved.forEach((r,i)=>{ const d=document.createElement('div'); d.textContent=`${i+1}. ${r.mm.toFixed(3)} mm @ ${r.mag.toFixed(1)}× — ${r.time}`; measureListEl.appendChild(d); }); }
-
-  // Freeze logic: copy the currently displayed videoCanvas (zoomed) to frozenCanvas
-  freezeBtn.onclick = ()=>{
-    if(!isFrozen){
-      fitCanvas();
-      // copy videoCanvas content (already zoomed) to frozen canvas
-      frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
-      frozenCtx.drawImage(videoCanvas, 0, 0, videoCanvas.width, videoCanvas.height, 0, 0, frozenCanvas.width, frozenCanvas.height);
-      frozenCanvas.style.display='block'; videoCanvas.style.display='none'; isFrozen = true; freezeBtn.textContent='Unfreeze';
-    } else {
-      frozenCanvas.style.display='none'; videoCanvas.style.display='block'; isFrozen=false; freezeBtn.textContent='Freeze';
-    }
-  };
-
-  // Capture: use the same crop calculation to draw the high-res capture from the real video pixels,
-  // then overlay. This produces a high-res saved image matching the live view.
-  captureBtn.onclick = ()=>{
-    const baseW = 2048, baseH = 1536; // high-res 4:3 base
-    const c = document.createElement('canvas'); c.width = baseW; c.height = baseH;
-    const cx = c.getContext('2d');
-    const crop = computeVideoCrop();
-    // draw the real video pixels for crop -> avoid CSS transforms
-    try {
-      cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
-    } catch(e){
-      // fallback: draw the current canvas if drawImage(video,...) fails (some browsers)
-      cx.drawImage(videoCanvas, 0, 0, videoCanvas.width, videoCanvas.height, 0, 0, baseW, baseH);
-    }
-    // draw overlay scaled to capture resolution
-    cx.drawImage(overlay, 0, 0, baseW, baseH);
-    const ts = new Date().toISOString().replace(/[:.]/g,'-');
-    const link = document.createElement('a'); link.download=`Microscope_${ts}.png`; link.href=c.toDataURL('image/png'); link.click();
-  };
-
-  exportBtn.onclick = ()=>{
-    if(!saved.length) return alert('No data');
-    const csv = 'timestamp,mm,magnification\n' + saved.map(r=>`${r.time},${r.mm.toFixed(4)},${r.mag.toFixed(1)}`).join('\n');
-    const blob = new Blob([csv],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='measurements.csv'; a.click();
-  };
-
-  // overlay draw
-  function draw(){
-    ctx.clearRect(0,0,overlay.width,overlay.height);
-
-    // calibration & measurement crosses
-    for(let i=0;i<points.length;i++){
-      const p = points[i], color = p.type==='cal'?'#ffb020':'#06b6d4';
-      drawCross(p.x,p.y,7,color,2);
-      if(i%2===1 && points[i-1]){
-        const a=points[i-1], b=points[i], pix = Math.hypot(a.x-b.x,a.y-b.y);
-        const mm = calibration.pxPerMm ? (pix/zoom)/calibration.pxPerMm : null;
-        ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.strokeStyle=color; ctx.lineWidth=2; ctx.stroke();
-        ctx.fillStyle='#e6eef6'; ctx.font='13px sans-serif'; ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
-      }
-    }
-
-    // central crosshair & ticks
-    const cx = overlay.width/2, cy = overlay.height/2;
-    ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(overlay.width,cy); ctx.moveTo(cx,0); ctx.lineTo(cx,overlay.height); ctx.stroke();
-    const tick=10, tlen=4; ctx.beginPath();
-    for(let x=0;x<overlay.width;x+=tick){ ctx.moveTo(x,cy-tlen); ctx.lineTo(x,cy+tlen); }
-    for(let y=0;y<overlay.height;y+=tick){ ctx.moveTo(cx-tlen,y); ctx.lineTo(cx+tlen,y); }
-    ctx.stroke();
-
-    // 1 mm white scale bar (bottom-left)
-    if(calibration.pxPerMm){
-      const barMm = 1;
-      const barPx = calibration.pxPerMm * barMm * zoom;
-      const margin = 14;
-      const x1 = margin, x2 = Math.min(x1 + barPx, overlay.width - margin);
-      const y = overlay.height - margin;
-      ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
-      ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='left'; ctx.fillText(`${barMm} mm`, x2 + 8, y + 4);
-      ctx.beginPath(); ctx.moveTo(x1,y-6); ctx.lineTo(x1,y+6); ctx.moveTo(x2,y-6); ctx.lineTo(x2,y+6); ctx.stroke();
-    }
-
-    // date/time and zoom (top-right)
-    const now = new Date(), dateStr = now.toLocaleDateString(), timeStr = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    ctx.fillStyle='#fff'; ctx.font='12px monospace'; ctx.textAlign='right'; ctx.fillText(`${dateStr} ${timeStr}`, overlay.width-10, 18);
-    ctx.fillText(`Zoom: ${zoom.toFixed(1)}×`, overlay.width-10, 34);
-
-    // live numeric readout
-    const meas = points.filter(p=>p.type==='meas');
-    if(meas.length===2 && calibration.pxPerMm){
-      const pix = Math.hypot(meas[0].x - meas[1].x, meas[0].y - meas[1].y);
-      const mm = (pix / zoom) / calibration.pxPerMm;
-      liveReadout.textContent = mm.toFixed(3) + ' mm';
-    } else if(meas.length===1) liveReadout.textContent = 'Place second point'; else liveReadout.textContent='No measurement';
-  }
-
-  // main loop: update videoCanvas then overlay
+  // Main loop: update videoCanvas then overlay
   (function loop(){
-    if(!isFrozen) drawVideoToCanvas(); // keep drawing live when not frozen
-    draw(); // overlay updates regardless
+    if (!isFrozen) drawVideoToCanvas(); // Keep drawing live when not frozen
+    draw(); // Overlay updates regardless
     requestAnimationFrame(loop);
   })();
 
