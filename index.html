@@ -14,8 +14,17 @@ h1{font-size:18px;margin:0}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
 .viewer{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-height:80vh;min-height:320px}
 .video-box{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-video,canvas#frozenFrame,canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-video{z-index:0;background:#000}
+video, canvas#frozenFrame, canvas.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Add these two lines: */
+    transition: transform 0.1s ease-out; 
+    transform-origin: center;
+}video{z-index:0;background:#000}
 canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 .controls{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:10px}
 .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:8px}
@@ -183,8 +192,15 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
   function updateZoom(){
     zoom = Number(zoomRange.value);
     zoomDisplay.textContent = zoom.toFixed(1) + '×';
+    
+    // --- FIX: Apply visual scale to the video and frozen frames ---
+    const scaleCSS = `scale(${zoom})`;
+    video.style.transform = scaleCSS;
+    frozenCanvas.style.transform = scaleCSS;
+    // --------------------------------------------------------------
+
     updateMagnification();
-    draw(); // refresh overlay (scale bar depends on zoom)
+    draw(); 
   }
 
   zoomRange.addEventListener('input', updateZoom);
@@ -273,17 +289,32 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
   };
 
   // Capture: draw zoomed crop (same method used for freeze) then overlay; works on iPhone
-  captureBtn.onclick = ()=>{
-    const baseW = 2048, baseH = 1536; // high-res 4:3 base
-    const c = document.createElement('canvas'); c.width = baseW; c.height = baseH;
-    const cx = c.getContext('2d');
-    const crop = computeVideoCrop();
-    // draw actual video pixels for crop -> avoid CSS transforms
-    cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
-    // draw overlay scaled to capture resolution
-    cx.drawImage(overlay, 0, 0, baseW, baseH);
-    const ts = new Date().toISOString().replace(/[:.]/g,'-');
-    const link = document.createElement('a'); link.download=`Microscope_${ts}.png`; link.href=c.toDataURL('image/png'); link.click();
+  captureBtn.onclick = () => {
+      // 1. Set a high-resolution base for the capture (4:3 aspect ratio)
+      const baseW = 2048;
+      const baseH = 1536; 
+      const c = document.createElement('canvas');
+      c.width = baseW;
+      c.height = baseH;
+      const cx = c.getContext('2d');
+
+      // 2. Get the specific zoomed crop coordinates
+      const crop = computeVideoCrop();
+
+      // 3. Draw the zoomed video content to the capture canvas
+      // This takes the 'zoomed' portion of the video and scales it to our base resolution
+      cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
+
+      // 4. Draw the overlay (crosshair, measurements) on top
+      // We scale the overlay canvas to match the high-res capture size
+      cx.drawImage(overlay, 0, 0, baseW, baseH);
+
+      // 5. Trigger the download
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const link = document.createElement('a');
+      link.download = `Microscope_Capture_${ts}.png`;
+      link.href = c.toDataURL('image/png');
+      link.click();
   };
 
   exportBtn.onclick = ()=>{
