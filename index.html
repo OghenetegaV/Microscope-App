@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Microscope + Measurement (v2.2 — Fixed 4:3)</title>
+<title>Microscope + Measurement (v2.3 — Fixed Zoom + Back Camera)</title>
 <style>
 :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8}
 html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#071024 0%,#07192b 100%);color:#e6eef6}
@@ -12,20 +12,18 @@ header{display:flex;align-items:center;gap:12px;width:100%}
 h1{font-size:18px;margin:0}
 .grid{display:grid;grid-template-columns:1fr 360px;gap:12px;margin-top:12px;width:100%}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
+
 .viewer{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-height:80vh;min-height:320px}
 .video-box{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-video, canvas#frozenFrame, canvas.overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    /* Add these two lines: */
-    transition: transform 0.1s ease-out; 
-    transform-origin: center;
-}video{z-index:0;background:#000}
-canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
+
+video, canvas#frozenFrame, canvas.overlay{
+  position:absolute;top:0;left:0;width:100%;height:100%;
+  object-fit:cover;
+  transform:none !important; /* CRITICAL: no CSS scaling; zoom is handled in capture/freeze + measurement math */
+}
+video{z-index:0;background:#000}
+canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent;pointer-events:auto}
+
 .controls{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:10px}
 .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:8px}
 .btn{background:var(--accent);color:#062024;padding:8px 10px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
@@ -38,6 +36,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
 @media (max-width:768px){.viewer{height:60vh;aspect-ratio:auto}.app{padding:5px}.controls{gap:6px}}
 </style>
 </head>
+
 <body>
 <div class="app">
   <header>
@@ -51,7 +50,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
         <div class="measure-readout" id="liveReadout">No measurement</div>
         <div class="video-box">
           <video id="video" playsinline muted></video>
-          <canvas id="frozenFrame"></canvas>
+          <canvas id="frozenFrame" style="display:none;"></canvas>
           <canvas id="overlay" class="overlay"></canvas>
           <button id="startCameraBtn" class="btn start-camera" style="display:block">Start Camera</button>
         </div>
@@ -65,13 +64,22 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       </div>
 
       <div class="panel" style="margin-top:8px">
-        <div class="small">Digital Zoom (digital crop)</div>
+        <div class="small">Camera</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+          <select id="cameraSelect" class="btn secondary" style="padding:8px 10px;min-width:220px"></select>
+          <button id="refreshCamerasBtn" class="btn secondary">Refresh</button>
+        </div>
+        <div class="small" style="margin-top:6px">On phones, default request is the back camera (environment) when available.</div>
+      </div>
+
+      <div class="panel" style="margin-top:8px">
+        <div class="small">Digital Zoom (crop in capture/freeze + measurement math)</div>
         <div style="display:flex;align-items:center;gap:6px;">
           <button id="zoomOutBtn" class="btn secondary" style="width:36px;">−</button>
           <input id="zoomRange" type="range" min="1" max="16" step="0.1" value="1" style="flex:1;">
           <button id="zoomInBtn" class="btn secondary" style="width:36px;">+</button>
         </div>
-        <div class="small">Current Zoom: <span id="zoomDisplay">1×</span></div>
+        <div class="small">Current Zoom: <span id="zoomDisplay">1.0×</span></div>
       </div>
     </div>
 
@@ -86,7 +94,7 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
         <div style="margin-top:8px">
           <label class="small">Pixels per mm (stored at zoom=1):</label>
           <div id="pxPerMm" style="font-weight:700">—</div>
-          <label class="small">True Magnification:</label>
+          <label class="small">Screen-relative magnification (approx.):</label>
           <div id="trueMag" style="font-weight:700">—</div>
         </div>
       </div>
@@ -104,248 +112,468 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
         </div>
       </div>
 
-      <div class="footer">v2.2 — Fixed 4:3 scientific viewport</div>
+      <div class="footer">v2.3 — fixed zoom/capture + back camera option</div>
     </aside>
   </div>
 </div>
 
 <script>
 (async function(){
-  const video = document.getElementById('video'),
-        overlay = document.getElementById('overlay'),
-        frozenCanvas = document.getElementById('frozenFrame'),
-        viewer = document.getElementById('viewer'),
-        startCameraBtn = document.getElementById('startCameraBtn'),
-        ctx = overlay.getContext('2d'),
-        frozenCtx = frozenCanvas.getContext('2d');
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const frozenCanvas = document.getElementById('frozenFrame');
+  const viewer = document.getElementById('viewer');
+  const startCameraBtn = document.getElementById('startCameraBtn');
 
-  const freezeBtn = document.getElementById('freezeBtn'),
-        captureBtn = document.getElementById('captureBtn'),
-        clearBtn = document.getElementById('clearBtn'),
-        exportBtn = document.getElementById('exportBtn'),
-        zoomRange = document.getElementById('zoomRange'),
-        zoomDisplay = document.getElementById('zoomDisplay'),
-        zoomOutBtn = document.getElementById('zoomOutBtn'),
-        zoomInBtn = document.getElementById('zoomInBtn'),
-        calModeBtn = document.getElementById('calModeBtn'),
-        resetCalBtn = document.getElementById('resetCalBtn'),
-        measureModeBtn = document.getElementById('measureModeBtn'),
-        saveMeasureBtn = document.getElementById('saveMeasureBtn'),
-        pxPerMmEl = document.getElementById('pxPerMm'),
-        trueMagEl = document.getElementById('trueMag'),
-        liveReadout = document.getElementById('liveReadout'),
-        measureListEl = document.getElementById('measureList');
+  const freezeBtn = document.getElementById('freezeBtn');
+  const captureBtn = document.getElementById('captureBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const exportBtn = document.getElementById('exportBtn');
 
-  let stream = null, isFrozen = false, currentMode = null;
-  let calibration = { pixels:null, mm:null, pxPerMm:null }; // px/mm at zoom=1
-  let points = [], saved = [], trueMag = 1;
+  const zoomRange = document.getElementById('zoomRange');
+  const zoomDisplay = document.getElementById('zoomDisplay');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+
+  const calModeBtn = document.getElementById('calModeBtn');
+  const resetCalBtn = document.getElementById('resetCalBtn');
+  const measureModeBtn = document.getElementById('measureModeBtn');
+  const saveMeasureBtn = document.getElementById('saveMeasureBtn');
+
+  const pxPerMmEl = document.getElementById('pxPerMm');
+  const trueMagEl = document.getElementById('trueMag');
+  const liveReadout = document.getElementById('liveReadout');
+  const measureListEl = document.getElementById('measureList');
+
+  const cameraSelect = document.getElementById('cameraSelect');
+  const refreshCamerasBtn = document.getElementById('refreshCamerasBtn');
+
+  const ctx = overlay.getContext('2d');
+  const frozenCtx = frozenCanvas.getContext('2d');
+
+  let stream = null;
+  let isFrozen = false;
+  let currentMode = null;
+
+  let calibration = { pxPerMm: null }; // px/mm at zoom=1 (display-space px)
+  let points = [];
+  let saved = [];
+  let trueMag = 1;
+
   let zoom = 1; // digital crop factor
+  let dragging = null;
+  let lastFreezeCrop = null;
+
+  // --- HiDPI canvas setup (store points in CSS pixels; draw with DPR transform) ---
+  function fitCanvas(){
+    const dpr = window.devicePixelRatio || 1;
+    const w = overlay.clientWidth;
+    const h = overlay.clientHeight;
+
+    [overlay, frozenCanvas].forEach(c => {
+      c.width = Math.max(1, Math.round(w * dpr));
+      c.height = Math.max(1, Math.round(h * dpr));
+      c.style.width = w + 'px';
+      c.style.height = h + 'px';
+    });
+
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    frozenCtx.setTransform(dpr,0,0,dpr,0,0);
+
+    draw();
+  }
   window.addEventListener('resize', fitCanvas);
 
-  function fitCanvas(){
-    const w = overlay.clientWidth, h = overlay.clientHeight;
-    [overlay, frozenCanvas].forEach(c => { c.width = w; c.height = h; });
+  function stopStream(){
+    if(stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
   }
 
-  async function initStream(){
+  async function listCameras(){
+    // Devices labels are often empty until a stream has been granted at least once.
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+
+    cameraSelect.innerHTML = '';
+    if(!cams.length){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No cameras found';
+      cameraSelect.appendChild(opt);
+      return;
+    }
+
+    for(const cam of cams){
+      const opt = document.createElement('option');
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `Camera ${cameraSelect.length + 1}`;
+      cameraSelect.appendChild(opt);
+    }
+
+    // Prefer an "environment" labeled camera if present
+    const envIndex = cams.findIndex(c => /back|rear|environment/i.test(c.label || ''));
+    if(envIndex >= 0) cameraSelect.selectedIndex = envIndex;
+  }
+
+  async function initStream(preferredDeviceId){
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true }); // Simplified
+      stopStream();
+
+      // Prefer back camera on phones: facingMode: environment.
+      // If a specific deviceId is selected, use it.
+      const constraints = preferredDeviceId ? {
+        video: { deviceId: { exact: preferredDeviceId } },
+        audio: false
+      } : {
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
       video.muted = true;
-      video.addEventListener('loadedmetadata', ()=>{ fitCanvas(); startCameraBtn.style.display = 'none'; });
+
       await video.play();
 
-      video.addEventListener('loadedmetadata', fitCanvas);
+      // After permission granted, populate labels properly
+      await listCameras();
+
+      startCameraBtn.style.display = 'none';
       fitCanvas();
-      startCameraBtn.style.display = 'none'; // Hide button after starting camera
     } catch (err) {
       console.error('Camera start failed:', err);
       startCameraBtn.style.display = 'block';
+      startCameraBtn.textContent = 'Start Camera';
+      alert('Camera start failed. Check permissions and HTTPS.');
     }
   }
 
   startCameraBtn.onclick = async () => {
     startCameraBtn.textContent = 'Starting...';
-    await initStream();
+    await initStream(cameraSelect.value || undefined);
+    startCameraBtn.textContent = 'Start Camera';
   };
 
-  // compute visible crop (object-fit:cover) then apply zoom crop
-  function computeVideoCrop(){
-    const vw = video.videoWidth, vh = video.videoHeight;
-    const elW = video.clientWidth, elH = video.clientHeight;
-    if(!vw || !vh) return {sx:0, sy:0, sw:vw, sh:vh};
+  refreshCamerasBtn.onclick = async () => {
+    await listCameras();
+  };
 
-    const videoRatio = vw / vh, boxRatio = elW / elH;
+  cameraSelect.onchange = async () => {
+    // Switching camera requires restarting stream
+    if(!cameraSelect.value) return;
+    isFrozen = false;
+    frozenCanvas.style.display = 'none';
+    video.style.display = 'block';
+    freezeBtn.textContent = 'Freeze';
+    await initStream(cameraSelect.value);
+  };
+
+  // Compute visible crop (object-fit:cover) then apply zoom crop.
+  // Returns crop in *video pixel space*.
+  function computeVideoCrop(){
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const elW = video.clientWidth;
+    const elH = video.clientHeight;
+
+    if(!vw || !vh || !elW || !elH) return {sx:0, sy:0, sw:vw||1, sh:vh||1};
+
+    const videoRatio = vw / vh;
+    const boxRatio = elW / elH;
+
     let sx, sy, sw, sh;
     if(videoRatio > boxRatio){
-      sh = vh; sw = sh * boxRatio; sx = (vw - sw) / 2; sy = 0;
+      sh = vh;
+      sw = sh * boxRatio;
+      sx = (vw - sw) / 2;
+      sy = 0;
     } else {
-      sw = vw; sh = sw / boxRatio; sx = 0; sy = (vh - sh) / 2;
+      sw = vw;
+      sh = sw / boxRatio;
+      sx = 0;
+      sy = (vh - sh) / 2;
     }
 
     // Apply zoom (crop further centered)
-    const swZoom = sw / zoom, shZoom = sh / zoom;
-    const sxZoom = sx + (sw - swZoom) / 2, syZoom = sy + (sh - shZoom) / 2;
+    const swZoom = sw / zoom;
+    const shZoom = sh / zoom;
+    const sxZoom = sx + (sw - swZoom) / 2;
+    const syZoom = sy + (sh - shZoom) / 2;
+
     return { sx: sxZoom, sy: syZoom, sw: swZoom, sh: shZoom };
   }
 
   function updateZoom(){
     zoom = Number(zoomRange.value);
     zoomDisplay.textContent = zoom.toFixed(1) + '×';
-    
-    // --- FIX: Apply visual scale to the video and frozen frames ---
-    const scaleCSS = `scale(${zoom})`;
-    video.style.transform = scaleCSS;
-    frozenCanvas.style.transform = scaleCSS;
-    // --------------------------------------------------------------
-
     updateMagnification();
-    draw(); 
+    draw();
   }
-
   zoomRange.addEventListener('input', updateZoom);
   zoomOutBtn.onclick = () => { zoomRange.value = Math.max(1, Number(zoomRange.value) - 0.5); updateZoom(); };
   zoomInBtn.onclick = () => { zoomRange.value = Math.min(16, Number(zoomRange.value) + 0.5); updateZoom(); };
 
   function updateMagnification(){
-    if(!calibration.pxPerMm){ trueMagEl.textContent='—'; trueMag = Number(zoom); return; }
-    const screenPPI = window.devicePixelRatio * 96;
+    if(!calibration.pxPerMm){
+      trueMagEl.textContent = '—';
+      trueMag = Number(zoom);
+      return;
+    }
+    // Approximation only. Kept, but labeled as screen-relative.
+    const screenPPI = (window.devicePixelRatio || 1) * 96;
     const screenPxPerMm = screenPPI / 25.4;
     trueMag = (calibration.pxPerMm / screenPxPerMm) * Number(zoom);
     trueMagEl.textContent = trueMag.toFixed(1) + '×';
   }
 
-  // drawing helpers
-  function drawCross(x,y,size,color,lineW){ ctx.strokeStyle=color; ctx.lineWidth=lineW; ctx.beginPath(); ctx.moveTo(x-size,y-size); ctx.lineTo(x+size,y+size); ctx.moveTo(x-size,y+size); ctx.lineTo(x+size,y-size); ctx.stroke(); }
+  function drawCross(x,y,size,color,lineW){
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineW;
+    ctx.beginPath();
+    ctx.moveTo(x-size,y-size); ctx.lineTo(x+size,y+size);
+    ctx.moveTo(x-size,y+size); ctx.lineTo(x+size,y-size);
+    ctx.stroke();
+  }
 
-  // pointer -> overlay coords
+  // pointer -> CSS pixel coords
   function clientToCanvas(e){
     const r = overlay.getBoundingClientRect();
-    const x = ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) * (overlay.width / r.width);
-    const y = ((e.touches ? e.touches[0].clientY : e.clientY) - r.top) * (overlay.height / r.height);
+    const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
+    const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
+    const x = clientX - r.left;
+    const y = clientY - r.top;
     return { x, y };
   }
 
-  let dragging = null;
-  overlay.addEventListener('pointerdown', e=>{
+  overlay.addEventListener('pointerdown', (e) => {
     overlay.setPointerCapture(e.pointerId);
     const p = clientToCanvas(e);
-    for(const pt of points){ if(Math.hypot(pt.x - p.x, pt.y - p.y) < 14){ dragging = pt; return; } }
+
+    for(const pt of points){
+      if(Math.hypot(pt.x - p.x, pt.y - p.y) < 14){
+        dragging = pt;
+        draw();
+        return;
+      }
+    }
+
     if(currentMode === 'calibrate'){
       points.push({ x:p.x, y:p.y, type:'cal' });
       const c = points.filter(pt=>pt.type==='cal');
-      if(c.length===2){
-        const dx = c[0].x - c[1].x, dy = c[0].y - c[1].y, pixDisplay = Math.hypot(dx,dy);
+      if(c.length === 2){
+        const dx = c[0].x - c[1].x;
+        const dy = c[0].y - c[1].y;
+        const pixDisplay = Math.hypot(dx,dy);
+
         const real = prompt('Enter real distance (mm):');
-        if(real && !isNaN(real) && Number(real)>0){
-          // store pxPerMm at zoom=1
-          calibration = { pixels: (pixDisplay / zoom), mm: Number(real), pxPerMm: (pixDisplay/Number(real))/zoom };
+        if(real && !isNaN(real) && Number(real) > 0){
+          // store pxPerMm at zoom=1 (display-space px)
+          // pixDisplay was measured at current zoom, so normalize:
+          const pixAtZoom1 = pixDisplay / zoom;
+          calibration.pxPerMm = pixAtZoom1 / Number(real);
+
           pxPerMmEl.textContent = calibration.pxPerMm.toFixed(4) + ' px/mm';
           updateMagnification();
-          video.play().catch(()=>{});
-        } else alert('Invalid input');
-        currentMode = null; calModeBtn.textContent = 'Enter Calibrate Mode';
+        } else {
+          alert('Invalid input');
+        }
+
+        currentMode = null;
+        calModeBtn.textContent = 'Enter Calibrate Mode';
         points = points.filter(p=>p.type!=='cal');
       }
     } else if(currentMode === 'measure'){
       points.push({ x:p.x, y:p.y, type:'meas' });
       const m = points.filter(pt=>pt.type==='meas');
-      if(m.length===2){ currentMode = null; measureModeBtn.textContent = 'Measure'; }
+      if(m.length === 2){
+        currentMode = null;
+        measureModeBtn.textContent = 'Measure';
+      }
     }
+
     draw();
   });
 
-  overlay.addEventListener('pointermove', e=>{ if(!dragging) return; const p=clientToCanvas(e); dragging.x=p.x; dragging.y=p.y; draw(); });
-  overlay.addEventListener('pointerup', ()=> dragging=null );
+  overlay.addEventListener('pointermove', (e) => {
+    if(!dragging) return;
+    const p = clientToCanvas(e);
+    dragging.x = p.x;
+    dragging.y = p.y;
+    draw();
+  });
 
-  calModeBtn.onclick = ()=>{ currentMode = currentMode==='calibrate'?null:'calibrate'; calModeBtn.textContent = currentMode? 'Exit Calibrate Mode':'Enter Calibrate Mode'; };
-  measureModeBtn.onclick = ()=>{ currentMode = currentMode==='measure'?null:'measure'; measureModeBtn.textContent = currentMode? 'Exit Measure Mode':'Measure'; };
-  resetCalBtn.onclick = ()=>{ calibration = { pixels:null, mm:null, pxPerMm:null }; pxPerMmEl.textContent='—'; trueMagEl.textContent='—'; draw(); };
-  clearBtn.onclick = ()=>{ points = []; liveReadout.textContent='No measurement'; draw(); };
+  function endDrag(){
+    dragging = null;
+    draw();
+  }
+  overlay.addEventListener('pointerup', endDrag);
+  overlay.addEventListener('pointercancel', endDrag);
+  overlay.addEventListener('lostpointercapture', endDrag);
 
-  saveMeasureBtn.onclick = ()=>{
-    const m = points.filter(p=>p.type==='meas');
-    if(m.length<2) return alert('Place two points');
-    if(!calibration.pxPerMm) return alert('Calibrate first');
-    const pixDisplay = Math.hypot(m[0].x - m[1].x, m[0].y - m[1].y);
-    const mm = (pixDisplay / zoom) / calibration.pxPerMm;
-    saved.push({ time:new Date().toISOString(), mm, mag:trueMag });
-    updateList();
+  calModeBtn.onclick = () => {
+    currentMode = currentMode === 'calibrate' ? null : 'calibrate';
+    calModeBtn.textContent = currentMode ? 'Exit Calibrate Mode' : 'Enter Calibrate Mode';
+  };
+  measureModeBtn.onclick = () => {
+    currentMode = currentMode === 'measure' ? null : 'measure';
+    measureModeBtn.textContent = currentMode ? 'Exit Measure Mode' : 'Measure';
+  };
+  resetCalBtn.onclick = () => {
+    calibration.pxPerMm = null;
+    pxPerMmEl.textContent='—';
+    trueMagEl.textContent='—';
+    draw();
+  };
+  clearBtn.onclick = () => {
+    points = [];
+    liveReadout.textContent='No measurement';
+    draw();
   };
 
-  function updateList(){ measureListEl.innerHTML=''; saved.forEach((r,i)=>{ const d=document.createElement('div'); d.textContent=`${i+1}. ${r.mm.toFixed(3)} mm @ ${r.mag.toFixed(1)}× — ${r.time}`; measureListEl.appendChild(d); }); }
+  saveMeasureBtn.onclick = () => {
+    const m = points.filter(p=>p.type==='meas');
+    if(m.length < 2) return alert('Place two points');
+    if(!calibration.pxPerMm) return alert('Calibrate first');
 
-  // Freeze logic: draw visible crop to frozenCanvas (pixel-perfect)
-  freezeBtn.onclick = ()=>{
+    const pixDisplay = Math.hypot(m[0].x - m[1].x, m[0].y - m[1].y);
+    const mm = (pixDisplay / zoom) / calibration.pxPerMm;
+
+    saved.push({ time:new Date().toISOString(), mm, mag:trueMag });
+    updateList();
+    draw();
+  };
+
+  function updateList(){
+    measureListEl.innerHTML = '';
+    saved.forEach((r,i)=>{
+      const d = document.createElement('div');
+      d.textContent = `${i+1}. ${r.mm.toFixed(3)} mm @ ${r.mag.toFixed(1)}× — ${r.time}`;
+      measureListEl.appendChild(d);
+    });
+  }
+
+  freezeBtn.onclick = () => {
+    if(!stream) return alert('Start camera first');
+
     if(!isFrozen){
       fitCanvas();
       const crop = computeVideoCrop();
-      frozenCtx.clearRect(0,0,frozenCanvas.width,frozenCanvas.height);
-      frozenCtx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, frozenCanvas.width, frozenCanvas.height);
-      frozenCanvas.style.display='block'; video.style.display='none'; isFrozen = true; freezeBtn.textContent='Unfreeze';
+      lastFreezeCrop = crop;
+
+      // draw into frozenCanvas using CSS pixel destination
+      const w = overlay.clientWidth;
+      const h = overlay.clientHeight;
+
+      frozenCtx.clearRect(0,0,w,h);
+      frozenCtx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
+
+      frozenCanvas.style.display = 'block';
+      video.style.display = 'none';
+      isFrozen = true;
+      freezeBtn.textContent = 'Unfreeze';
     } else {
-      frozenCanvas.style.display='none'; video.style.display='block'; isFrozen=false; freezeBtn.textContent='Freeze';
+      frozenCanvas.style.display = 'none';
+      video.style.display = 'block';
+      isFrozen = false;
+      freezeBtn.textContent = 'Freeze';
     }
+
+    draw();
   };
 
-  // Capture: draw zoomed crop (same method used for freeze) then overlay; works on iPhone
-  captureBtn.onclick = () => {
-      // 1. Set a high-resolution base for the capture (4:3 aspect ratio)
-      const baseW = 2048;
-      const baseH = 1536; 
-      const c = document.createElement('canvas');
-      c.width = baseW;
-      c.height = baseH;
-      const cx = c.getContext('2d');
+  // Capture: uses zoom crop; if frozen, captures the frozen frame source to avoid black/blank captures.
+  captureBtn.onclick = async () => {
+    if(!stream) return alert('Start camera first');
 
-      // 2. Get the specific zoomed crop coordinates
+    const baseW = 2048, baseH = 1536;
+    const c = document.createElement('canvas');
+    c.width = baseW; c.height = baseH;
+    const cx = c.getContext('2d');
+
+    if(isFrozen){
+      // Capture what user sees (frozenCanvas already contains the correct crop)
+      cx.drawImage(frozenCanvas, 0, 0, frozenCanvas.width, frozenCanvas.height, 0, 0, baseW, baseH);
+    } else {
       const crop = computeVideoCrop();
-
-      // 3. Draw the zoomed video content to the capture canvas
-      // This takes the 'zoomed' portion of the video and scales it to our base resolution
       cx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, baseW, baseH);
+    }
 
-      // 4. Draw the overlay (crosshair, measurements) on top
-      // We scale the overlay canvas to match the high-res capture size
-      cx.drawImage(overlay, 0, 0, baseW, baseH);
+    // overlay on top (scale overlay canvas content to capture size)
+    cx.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, baseW, baseH);
 
-      // 5. Trigger the download
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const link = document.createElement('a');
-      link.download = `Microscope_Capture_${ts}.png`;
-      link.href = c.toDataURL('image/png');
-      link.click();
+    // iOS/Safari blank-screen fix: use toBlob + object URL (avoid data URL navigation issues)
+    const ts = new Date().toISOString().replace(/[:.]/g,'-');
+    c.toBlob((blob) => {
+      if(!blob) return alert('Capture failed');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Microscope_Capture_${ts}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    }, 'image/png');
   };
 
-  exportBtn.onclick = ()=>{
+  exportBtn.onclick = () => {
     if(!saved.length) return alert('No data');
     const csv = 'timestamp,mm,magnification\n' + saved.map(r=>`${r.time},${r.mm.toFixed(4)},${r.mag.toFixed(1)}`).join('\n');
-    const blob = new Blob([csv],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='measurements.csv'; a.click();
+    const blob = new Blob([csv],{type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'measurements.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
   };
 
-  // main overlay draw
   function draw(){
-    ctx.clearRect(0,0,overlay.width,overlay.height);
+    const w = overlay.clientWidth;
+    const h = overlay.clientHeight;
+
+    ctx.clearRect(0,0,w,h);
 
     // calibration & measurement crosses
     for(let i=0;i<points.length;i++){
-      const p = points[i], color = p.type==='cal'?'#ffb020':'#06b6d4';
+      const p = points[i];
+      const color = p.type==='cal' ? '#ffb020' : '#06b6d4';
       drawCross(p.x,p.y,7,color,2);
-      if(i%2===1 && points[i-1]){
-        const a=points[i-1], b=points[i], pix = Math.hypot(a.x-b.x,a.y-b.y);
+
+      // only draw line/label for pairs of same type
+      const prev = points[i-1];
+      if(i%2===1 && prev && prev.type === p.type){
+        const a = prev, b = p;
+        const pix = Math.hypot(a.x-b.x,a.y-b.y);
         const mm = calibration.pxPerMm ? (pix/zoom)/calibration.pxPerMm : null;
-        ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.strokeStyle=color; ctx.lineWidth=2; ctx.stroke();
-        ctx.fillStyle='#e6eef6'; ctx.font='13px sans-serif'; ctx.fillText(mm?mm.toFixed(3)+' mm':Math.round(pix)+' px',(a.x+b.x)/2+8,(a.y+b.y)/2-8);
+
+        ctx.beginPath();
+        ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+        ctx.strokeStyle=color; ctx.lineWidth=2; ctx.stroke();
+
+        ctx.fillStyle='#e6eef6';
+        ctx.font='13px sans-serif';
+        ctx.fillText(mm ? mm.toFixed(3)+' mm' : Math.round(pix)+' px', (a.x+b.x)/2+8, (a.y+b.y)/2-8);
       }
     }
 
     // central crosshair & ticks
-    const cx = overlay.width/2, cy = overlay.height/2;
-    ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(overlay.width,cy); ctx.moveTo(cx,0); ctx.lineTo(cx,overlay.height); ctx.stroke();
-    const tick=10, tlen=4; ctx.beginPath();
-    for(let x=0;x<overlay.width;x+=tick){ ctx.moveTo(x,cy-tlen); ctx.lineTo(x,cy+tlen); }
-    for(let y=0;y<overlay.height;y+=tick){ ctx.moveTo(cx-tlen,y); ctx.lineTo(cx+tlen,y); }
+    const cxp = w/2, cyp = h/2;
+    ctx.strokeStyle='rgba(255,255,255,0.45)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(0,cyp); ctx.lineTo(w,cyp);
+    ctx.moveTo(cxp,0); ctx.lineTo(cxp,h);
+    ctx.stroke();
+
+    const tick=10, tlen=4;
+    ctx.beginPath();
+    for(let x=0;x<w;x+=tick){ ctx.moveTo(x,cyp-tlen); ctx.lineTo(x,cyp+tlen); }
+    for(let y=0;y<h;y+=tick){ ctx.moveTo(cxp-tlen,y); ctx.lineTo(cxp+tlen,y); }
     ctx.stroke();
 
     // 1 mm white scale bar (bottom-left)
@@ -353,17 +581,28 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       const barMm = 1;
       const barPx = calibration.pxPerMm * barMm * zoom;
       const margin = 14;
-      const x1 = margin, x2 = Math.min(x1 + barPx, overlay.width - margin);
-      const y = overlay.height - margin;
-      ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
-      ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='left'; ctx.fillText(`${barMm} mm`, x2 + 8, y + 4);
-      ctx.beginPath(); ctx.moveTo(x1,y-6); ctx.lineTo(x1,y+6); ctx.moveTo(x2,y-6); ctx.lineTo(x2,y+6); ctx.stroke();
+      const x1 = margin, x2 = Math.min(x1 + barPx, w - margin);
+      const y = h - margin;
+
+      ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
+
+      ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='left';
+      ctx.fillText(`${barMm} mm`, x2 + 8, y + 4);
+
+      ctx.beginPath();
+      ctx.moveTo(x1,y-6); ctx.lineTo(x1,y+6);
+      ctx.moveTo(x2,y-6); ctx.lineTo(x2,y+6);
+      ctx.stroke();
     }
 
     // date/time and zoom (top-right)
-    const now = new Date(), dateStr = now.toLocaleDateString(), timeStr = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    ctx.fillStyle='#fff'; ctx.font='12px monospace'; ctx.textAlign='right'; ctx.fillText(`${dateStr} ${timeStr}`, overlay.width-10, 18);
-    ctx.fillText(`Zoom: ${zoom.toFixed(1)}×`, overlay.width-10, 34);
+    const now = new Date();
+    const dateStr = now.toLocaleDateString();
+    const timeStr = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    ctx.fillStyle='#fff'; ctx.font='12px monospace'; ctx.textAlign='right';
+    ctx.fillText(`${dateStr} ${timeStr}`, w-10, 18);
+    ctx.fillText(`Zoom: ${zoom.toFixed(1)}×`, w-10, 34);
 
     // live numeric readout
     const meas = points.filter(p=>p.type==='meas');
@@ -371,13 +610,31 @@ canvas.overlay,canvas#frozenFrame{z-index:1;background:transparent}
       const pix = Math.hypot(meas[0].x - meas[1].x, meas[0].y - meas[1].y);
       const mm = (pix / zoom) / calibration.pxPerMm;
       liveReadout.textContent = mm.toFixed(3) + ' mm';
-    } else if(meas.length===1) liveReadout.textContent = 'Place second point'; else liveReadout.textContent='No measurement';
+    } else if(meas.length===1){
+      liveReadout.textContent = 'Place second point';
+    } else {
+      liveReadout.textContent = 'No measurement';
+    }
   }
 
-  // computeVideoCrop used inline when capturing/freezing
+  // Start animation loop (kept simple; if you want, this can be event-driven)
+  function loop(){
+    draw();
+    requestAnimationFrame(loop);
+  }
 
-  // start animation
-  requestAnimationFrame(function loop(){ draw(); requestAnimationFrame(loop); });
+  // Initial UI setup
+  fitCanvas();
+  updateZoom();
+
+  // Try listing cameras (labels may be blank until permission granted)
+  try { await listCameras(); } catch(_) {}
+
+  // Auto-start attempt (some browsers block autoplay; user button remains)
+  // If you want strict user gesture only, comment this out.
+  // await initStream(cameraSelect.value || undefined);
+
+  requestAnimationFrame(loop);
 
 })();
 </script>
